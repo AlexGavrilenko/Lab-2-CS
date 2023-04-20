@@ -1,0 +1,169 @@
+import bitstring
+from codecs import decode
+import struct
+
+#Функції, які перетворюють float та int в список бітів
+def StrToBin(s):
+    res = [i == '1' for i in list(s)]
+    res.reverse()
+    return res
+
+def BinToStr(b):
+    br = list(b)
+    br.reverse()
+    return ''.join(['1' if i else '0' for i in br])
+
+def FloatToBin(f):
+    return StrToBin(bitstring.BitArray(float=f, length=32).bin)
+
+def IntToBytes(n, length):
+    return decode('%%0%dx' % (length << 1) % n, 'hex')[-length:]
+
+def BinToFloat(b):
+    bf = IntToBytes(int(BinToStr(b), 2), 4)
+    return struct.unpack('>f', bf)[0]
+
+def IntToBin(i):
+    return StrToBin(bitstring.BitArray('i32=' + str(i)).bin)
+
+def BinToInt(b):
+    return bitstring.BitArray(bin=BinToStr(b)).int
+
+#Додавання
+def Add(o1, o2):
+    res = [False for i in o1]
+    carry = False
+    for i in range(len(o1)):
+        res[i] = (o1[i] != o2[i]) != carry
+        carry = o1[i] and o2[i] or o1[i] and carry or o2[i] and carry
+    return res, carry
+
+#Інвертуємо число
+def Neg(o):
+    res = [not i for i in o]
+    one = [False for i in o]
+    one[0] = True
+    res, _ = Add(res, one)
+    return res
+
+#Віднімання
+def Sub(o1, o2):
+    return Add(o1, Neg(o2))
+
+# Зсув вправо
+def SHR(o):
+    res = o[:]
+    for i in range(len(res) - 1):
+        res[i] = res[i + 1]
+    res[-1] = False
+    return res
+
+# Зсув вліво
+def shl(o):
+    res = o[:]
+    res.reverse()
+    res = SHR(res)
+    res.reverse()
+    return res
+
+
+def Mul(o1, o2, signed=True):
+    o1c = o1[:]
+    o2c = o2[:]
+    s = False
+    if o1[len(o1) - 1] and signed:
+        o1c = Neg(o1c) # Інвертуємо значення якщо вони від'ємні
+        s = not s
+    if o2[len(o2) - 1] and signed:
+        o2c = Neg(o2c) # Інвертуємо значення якщо вони від'ємні
+        s = not s
+
+    res = [False for i in range(len(o1) + len(o2))]
+
+    for i in range(len(o1)):
+        if o2c[0]:
+            r, _ = Add(o1c, res[len(o1):])
+            res[len(o1):] = r
+        o2c = SHR(o2c)
+        res = SHR(res)
+    return Neg(res) if s and signed else res
+
+#Ділення
+def Div(o1, o2):
+    o1s = o1[31]# Знак першої змінної ( беремо останній біт)
+    o2s = o2[31]# Знак першої змінної ( беремо останній біт)
+
+    if o1s:
+        o1 = Neg(o1)
+    if o2s:
+        o2 = Neg(o2)
+
+    q = [False for i in range(32)]#Quotient розмір 32 біта, також весь заповнений 0
+    r = [False for i in range(64)]#Quotient розмір 32 біта, також весь заповнений 0
+    r[:32] = o1# в ділиме записали молодші 32 біти
+
+    for i in range(32):
+        r = shl(r)
+        q = shl(q)
+
+        r[32:], c = Sub(r[32:], o2)
+        q[0] = c
+        if not c:
+            r[32:], _ = Add(r[32:], o2)
+    if o1s:
+        r = Neg(r)
+    if o1s != o2s:
+        q = Neg(q)
+    return BinToInt(q), BinToInt(r[32:])
+
+#Функція для інвертування чисел в двійкове число для IEEE 754
+def floatToIEEE754(number):
+
+    s, E, M = number.split(" ")
+
+    result = ((-1) ** int(s)) * (((int(M, 2) - 1) / (2 ** 23)) + 1) * (2 ** (int(E, 2) - 127))
+
+    return result
+
+#Множення з плаваючою точкою
+def FMul(o1, o2):
+    s = o1[-1] != o2[-1]
+
+    zs = (o1[:23] == [False for i in range(23)]) or (o2[23:] == [False for i in range(23)])
+    ze = (o1[23:31] == [False for i in range(8)]) or (o2[23:31] == [False for i in range(8)])
+    oe = (o1[23:31] == [True for i in range(8)]) or (o2[23:31] == [True for i in range(8)])
+    if (oe and not zs) or (zs and oe and ze):
+        return [True for i in range(31)] + [s]
+    if zs and ze:
+        return [False for i in range(31)] + [s]
+    if zs and oe:
+        return [False for i in range(23)] + [True for i in range(8)] + [s]
+
+    si = Mul(o1[:23] + [True, False], o2[:23] + [True, False], False)
+    i = 49;
+    while i >= 0 and not si[i]:
+        i -= 1
+
+    sh = i - 49 + 4
+
+    e = BinToInt(o1[23:31] + [False for i in range(8)]) + BinToInt(o2[23:31] + [False for i in range(8)]) + sh - 128
+
+    if e > 255:
+        return [False for i in range(23)] + [True for i in range(8)] + [s]
+    elif e < 0:
+        return [False for i in range(31)] + [s]
+
+    return si[i - 23:i - 0] + IntToBin(e)[:8] + [s]
+
+# Множення двійкових чисел(зсув результату ввправо)
+print(bin(BinToInt(Mul(IntToBin(int(input("Перший множник ="),2)), IntToBin(int(input("Другий множник ="),2)))))[2:])
+# Ділення двійкових чисел(Зсув залишку вправо)
+result = Div(IntToBin(int(input("Ділене ="),2)), IntToBin(int(input("Дільник ="),2)))
+print(('(Ціле, Остача):'), bin(result[0])[2:], bin(result[1])[2:])
+# floating point множення
+result = FMul(FloatToBin(float(floatToIEEE754(input("Перший множник(float) =")))), FloatToBin(float(floatToIEEE754(input("Другий множник(float) =")))))
+StrResult = ""
+for i in result:
+    StrResult = str(int(i)) + StrResult
+
+print(StrResult[0],StrResult[1:9], StrResult[9:])
